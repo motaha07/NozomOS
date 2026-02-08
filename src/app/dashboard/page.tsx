@@ -1,26 +1,62 @@
-import { metrics, projects, announcements, calendarEvents, employees } from "@/lib/data";
+import { Metadata } from "next";
+import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth";
 
-export default function DashboardPage() {
-  const todayEvents = calendarEvents.filter((e) => e.date === "2026-02-07");
-  const recentAnnouncements = announcements.slice(0, 3);
+export const metadata: Metadata = {
+  title: "Dashboard",
+  description: "Company overview with key metrics, active projects, and team status.",
+};
+
+export default async function DashboardPage() {
+  const session = await auth();
+  const userName = session?.user?.name?.split(" ")[0] || "there";
+
+  const [employees, projects, allTasks, announcements, calendarEvents] =
+    await Promise.all([
+      prisma.employee.findMany(),
+      prisma.project.findMany({
+        include: {
+          tasks: true,
+          members: { include: { employee: true } },
+        },
+      }),
+      prisma.task.findMany(),
+      prisma.announcement.findMany({
+        include: { author: { select: { name: true } } },
+        orderBy: [{ pinned: "desc" }, { createdAt: "desc" }],
+        take: 3,
+      }),
+      prisma.calendarEvent.findMany({
+        orderBy: [{ date: "asc" }, { time: "asc" }],
+      }),
+    ]);
+
+  const today = new Date().toISOString().split("T")[0];
+  const todayEvents = calendarEvents.filter(
+    (e) => e.date.toISOString().split("T")[0] === today
+  );
   const activeProjects = projects.filter((p) => p.status === "active");
+  const openTasks = allTasks.filter((t) => t.status !== "done").length;
+  const upcomingEvents = calendarEvents.filter(
+    (e) => e.date.toISOString().split("T")[0] >= today
+  ).length;
 
   return (
-    <div className="p-8">
+    <div className="p-4 pt-16 md:p-8 md:pt-8">
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Welcome back, Sarah. Here&apos;s what&apos;s happening at Nozom today.
+          Welcome back, {userName}. Here&apos;s what&apos;s happening at Nozom today.
         </p>
       </div>
 
       {/* Metric Cards */}
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard title="Team Members" value={metrics.totalEmployees} icon="team" color="blue" />
-        <MetricCard title="Active Projects" value={metrics.activeProjects} icon="projects" color="purple" />
-        <MetricCard title="Open Tasks" value={metrics.openTasks} icon="tasks" color="amber" />
-        <MetricCard title="Upcoming Events" value={metrics.upcomingEvents} icon="events" color="green" />
+        <MetricCard title="Team Members" value={employees.length} icon="team" color="blue" />
+        <MetricCard title="Active Projects" value={activeProjects.length} icon="projects" color="purple" />
+        <MetricCard title="Open Tasks" value={openTasks} icon="tasks" color="amber" />
+        <MetricCard title="Upcoming Events" value={upcomingEvents} icon="events" color="green" />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -48,30 +84,27 @@ export default function DashboardPage() {
                   <p className="mb-3 text-sm text-muted-foreground">{project.description}</p>
                   <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
                     <span>{project.progress}% complete</span>
-                    <span>Due {project.deadline}</span>
+                    <span>Due {project.deadline.toISOString().split("T")[0]}</span>
                   </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-valuenow={project.progress} aria-valuemin={0} aria-valuemax={100} aria-label={`${project.name} progress`}>
                     <div
                       className="h-full rounded-full bg-primary transition-all"
                       style={{ width: `${project.progress}%` }}
                     />
                   </div>
                   <div className="mt-3 flex items-center gap-1">
-                    {project.team.slice(0, 4).map((member) => {
-                      const initials = member.split(" ").map((n) => n[0]).join("");
-                      return (
-                        <div
-                          key={member}
-                          className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary"
-                          title={member}
-                        >
-                          {initials}
-                        </div>
-                      );
-                    })}
-                    {project.team.length > 4 && (
+                    {project.members.slice(0, 4).map((m) => (
+                      <div
+                        key={m.id}
+                        className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary"
+                        title={m.employee.name}
+                      >
+                        {m.employee.avatar}
+                      </div>
+                    ))}
+                    {project.members.length > 4 && (
                       <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100 text-[10px] font-medium text-slate-500">
-                        +{project.team.length - 4}
+                        +{project.members.length - 4}
                       </div>
                     )}
                   </div>
@@ -100,6 +133,7 @@ export default function DashboardPage() {
                           ? "bg-purple-500"
                           : "bg-green-500"
                       }`}
+                      aria-hidden="true"
                     />
                     <div className="min-w-0">
                       <p className="text-sm font-medium text-card-foreground">{event.title}</p>
@@ -119,7 +153,7 @@ export default function DashboardPage() {
           <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
             <h2 className="mb-4 text-lg font-semibold text-card-foreground">Latest Announcements</h2>
             <div className="space-y-3">
-              {recentAnnouncements.map((announcement) => (
+              {announcements.map((announcement) => (
                 <div key={announcement.id} className="border-b border-border pb-3 last:border-0 last:pb-0">
                   <div className="mb-1 flex items-center gap-2">
                     {announcement.pinned && (
@@ -143,7 +177,7 @@ export default function DashboardPage() {
                   </div>
                   <p className="text-sm font-medium text-card-foreground">{announcement.title}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {announcement.author} &middot; {announcement.date}
+                    {announcement.author.name} &middot; {announcement.createdAt.toISOString().split("T")[0]}
                   </p>
                 </div>
               ))}
@@ -168,6 +202,7 @@ export default function DashboardPage() {
                           ? "bg-amber-500"
                           : "bg-slate-300"
                       }`}
+                      aria-label={emp.status}
                     />
                   </div>
                   <div className="min-w-0">
@@ -210,7 +245,7 @@ function MetricCard({
           <p className="text-sm font-medium text-muted-foreground">{title}</p>
           <p className={`mt-1 text-3xl font-bold ${c.text}`}>{value}</p>
         </div>
-        <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${c.iconBg}`}>
+        <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${c.iconBg}`} aria-hidden="true">
           {icon === "team" && (
             <svg className={`h-6 w-6 ${c.text}`} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
